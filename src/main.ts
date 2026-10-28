@@ -9,7 +9,7 @@ import { type GenerationStats, Neat } from './neat/index.ts';
 import { NetworkView } from './networkView.ts';
 
 // ---- Parameters ----
-const TRACK_NAME = 'Oval'; // starting track, can be changed on the page: 'Oval', 'Classic', 'Twisty'
+const TRACK_NAME = 'Oval'; // starting track, can be changed on the page: 'Oval', 'Twisty', 'Maze'
 const POPULATION = 100; // cars per generation
 const MAX_GENERATION_TIME = 30; // simulated seconds before a generation is ended (good cars could lap forever)
 
