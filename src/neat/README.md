@@ -244,7 +244,7 @@ Every option is optional except `inputs` and `outputs`. The defaults are in `con
 | `excessCoefficient` / `disjointCoefficient` / `weightCoefficient` | 1 / 1 / 0.4 | c1, c2, c3 of the genetic distance |
 | `distanceMinGenes` | 20 | N of the genetic distance is never lower than this |
 | `survivalRate` | 0.2 | Best part of a specie that can be a parent |
-| `championMinSpecieSize` | 5 | The champion is copied unchanged if the specie is bigger than this |
+| `championMinSpecieSize` | 5 | The champion is copied unchanged if the specie is bigger than this (the best genome of the whole generation is always copied unchanged) |
 | `cloneChance` | 0.25 | Child = copy of a parent (otherwise crossover) |
 | `interspeciesCrossoverChance` | 0.001 | Second parent from another specie |
 | `disabledGeneChance` | 0.75 | Gene disabled in a parent, disabled in the child |

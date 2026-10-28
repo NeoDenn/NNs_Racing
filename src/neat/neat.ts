@@ -157,7 +157,7 @@ export class Neat {
     this.calculateChildrenAndFitnessData();
 
     // 4 e 5 Children creation and specie death
-    this.population = this.selectAndMutateChildren();
+    this.population = this.selectAndMutateChildren(bestOfGeneration);
     for (const genome of this.population) {
       genome.rawFitness = 0;
       genome.fitness = 0;
@@ -187,8 +187,9 @@ export class Neat {
     return { generation: this.generation, bestEver: this.best!.toJSON(), species: species };
   }
 
-  private selectAndMutateChildren(): Genome[] {
-    let newPopulation: Genome[] = new Array(0);
+  private selectAndMutateChildren(bestOfGeneration: Genome): Genome[] {
+    // The best genome of the generation is always copied unchanged, whatever the size of its specie
+    let newPopulation: Genome[] = [bestOfGeneration.clone()];
 
     for(const [id, specie] of this.speciesPool) {
       // 4.1 Selezione
@@ -204,8 +205,8 @@ export class Neat {
       // Sort from best to worst
       specie.genomes.sort((a, b) => b.fitness - a.fitness);
 
-      // Copy 1 champion if the specie is big enough
-      if(nOfGenomes > this.config.championMinSpecieSize) {
+      // Copy 1 champion if the specie is big enough (not if it's the best of the generation, it's already copied)
+      if(nOfGenomes > this.config.championMinSpecieSize && specie.genomes[0] !== bestOfGeneration) {
         newPopulation.push(specie.genomes[0].clone());
         childrenLeftToMake--;
       }
@@ -342,17 +343,18 @@ export class Neat {
     for (const specie of eligibleSpecies)
       sumOfAvgFitnesses += specie.avgFitness + shift;
 
-    // Divide between the max n. of genomes
+    // Divide between the max n. of genomes (1 spot is for the best genome of the generation)
+    const childrenToMake = this.config.populationSize - 1;
     let sumOfCalculatedChildren = 0;
     for(const specie of eligibleSpecies) {
       // If only 1 specie, then full pool of children
       if (eligibleSpecies.length == 1)
-        specie.childrenInNextGen = this.config.populationSize;
+        specie.childrenInNextGen = childrenToMake;
 
       // If more, n is proportional to it's average fitness
       else {
         let percOfChildren = ((specie.avgFitness + shift) / sumOfAvgFitnesses);
-        specie.childrenInNextGen = Math.floor(this.config.populationSize * percOfChildren);
+        specie.childrenInNextGen = Math.floor(childrenToMake * percOfChildren);
         sumOfCalculatedChildren += specie.childrenInNextGen;
       }
     }
@@ -361,7 +363,7 @@ export class Neat {
       return;
 
     // If the total is less than the n. of genomes, we add to the lowest until it's full
-    let freeSpots = this.config.populationSize - sumOfCalculatedChildren;
+    let freeSpots = childrenToMake - sumOfCalculatedChildren;
     while (freeSpots > 0) {
       let minimumSpecie = eligibleSpecies[0];
 

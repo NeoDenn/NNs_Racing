@@ -76,9 +76,15 @@ const neat = new Neat({
   outputs: 2, // steer, throttle
   activation: 'tanh', // outputs in -1..1
   populationSize: POPULATION,
-  complexityPenalty: 0.0000000000001,
+  complexityPenalty: 0,
   weightRange: 10,
-  maxStagnation: 30
+  maxStagnation: 50,
+  addNodeChance: 0.1,
+  deleteNodeChance: 0.02,
+  addConnectionChance: 0.15,
+  deleteConnectionChance: 0.75,
+  minSpecies: 20,
+  maxSpecies: 30,
 });
 
 let sim: Simulation;
