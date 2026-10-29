@@ -1,26 +1,16 @@
 // Training page: NEAT (src/neat) learns to drive in the racing environment (src/environment).
+// The training itself is in training.ts, shared with the terminal (npm run train).
 
 import './style.css';
 import { Renderer } from './environment/renderer.ts';
-import { type Agent, DEFAULT_SIMULATION_CONFIG, Simulation, inputCount } from './environment/simulation.ts';
-import { buildTrack } from './environment/track.ts';
+import { type Agent, DEFAULT_SIMULATION_CONFIG, Simulation } from './environment/simulation.ts';
 import { TRACKS } from './environment/tracks.ts';
-import { type GenerationStats, Neat } from './neat/index.ts';
 import { NetworkView } from './networkView.ts';
-
-// ---- Parameters ----
-const TRACK_NAME = 'Oval'; // starting track, can be changed on the page: 'Oval', 'Twisty', 'Maze'
-const POPULATION = 100; // cars per generation
-const MAX_GENERATION_TIME = 30; // simulated seconds before a generation is ended (good cars could lap forever)
-
-// Score of one car at the end of its generation: higher = better.
-// One point per checkpoint, so a car that gets further (or laps faster in the time limit) wins.
-function fitness(agent: Agent): number {
-  return agent.checkpointsPassed;
-}
+import { DEFAULT_TRACK, MAX_GENERATION_TIME, type SaveFile, Trainer, findTrack } from './training.ts';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#track')!;
 const startButton = document.querySelector<HTMLButtonElement>('#start')!;
+const resetButton = document.querySelector<HTMLButtonElement>('#reset')!;
 const trackSelect = document.querySelector<HTMLSelectElement>('#track-select')!;
 const speedSelect = document.querySelector<HTMLSelectElement>('#speed')!;
 const sensorsSelect = document.querySelector<HTMLSelectElement>('#show-sensors')!;
@@ -28,69 +18,75 @@ const checkpointsToggle = document.querySelector<HTMLInputElement>('#show-checkp
 const info = document.querySelector<HTMLPreElement>('#info')!;
 const networksContainer = document.querySelector<HTMLDivElement>('#networks')!;
 
-function findTrack(name: string) {
-  const def = TRACKS.find((t) => t.name === name);
-  if (!def) throw new Error(`No track named "${name}". Available: ${TRACKS.map((t) => t.name).join(', ')}`);
-  return buildTrack(def);
+// ---- Save file (saves/best-genome.json), shared with the terminal through the dev server (vite.config.ts) ----
+const SAVE_URL = '/api/save';
+let savedGeneration: number | null = null; // last generation in the save file, null = no save
+
+async function loadSave(): Promise<SaveFile | null> {
+  try {
+    const res = await fetch(SAVE_URL);
+    return res.ok ? ((await res.json()) as SaveFile) : null;
+  } catch {
+    return null; // no dev server (e.g. a static build): no saves
+  }
 }
 
-let track = findTrack(TRACK_NAME);
+function writeSave(save: SaveFile): void {
+  fetch(SAVE_URL, { method: 'PUT', body: JSON.stringify(save) })
+    .then((res) => {
+      if (res.ok) savedGeneration = save.generation;
+    })
+    .catch(() => {});
+}
+
+// A save that doesn't fit the network anymore (e.g. the number of sensors changed) is ignored
+function createTrainer(save: SaveFile | null): Trainer {
+  if (save) {
+    try {
+      const trainer = new Trainer(track, save);
+      savedGeneration = save.generation;
+      return trainer;
+    } catch (e) {
+      console.warn('Save file ignored:', e);
+    }
+  }
+  savedGeneration = null;
+  return new Trainer(track);
+}
+
+const save = await loadSave();
+const startTrack = save && TRACKS.some((t) => t.name === save.track) ? save.track : DEFAULT_TRACK;
+let track = findTrack(startTrack);
+let trainer = createTrainer(save);
 const renderer = new Renderer(canvas);
 
-for (const def of TRACKS) trackSelect.add(new Option(def.name, def.name, false, def.name === TRACK_NAME));
+for (const def of TRACKS) trackSelect.add(new Option(def.name, def.name, false, def.name === startTrack));
 
 // Switching track keeps the trained population and restarts the current generation on the new track
 trackSelect.addEventListener('change', () => {
   track = findTrack(trackSelect.value);
-  startGeneration();
+  trainer.setTrack(track);
   resetPlayer();
 });
 
-/*
-| `populationSize` | 100 | Genomes per generation |
-| `activation` | `"sigmoid"` | `"sigmoid"` (steepened, as in NEAT, outputs 0..1), `"tanh"` (-1..1), `"relu"`, `"identity"` |
-| `weightRange` | 3 | Weights and biases go from -weightRange to +weightRange |
-| `complexityPenalty` | 0.001 | Fitness lost for every enabled connection |
-| `maxNodes` / `maxConnections` | Infinity | Max size of a genome |
-| `compatibilityThreshold` | 3 | Starting species threshold (then it adapts) |
-| `minSpecies` / `maxSpecies` | 5 / 10 | The threshold adapts to stay in this range |
-| `thresholdStep` / `minThreshold` | 0.2 / 0.3 | How the threshold adapts |
-| `maxSpeciesSlots` | 100 | Max number of species at the same time |
-| `maxStagnation` | 15 | Generations without improvement before a specie stops having children |
-| `excessCoefficient` / `disjointCoefficient` / `weightCoefficient` | 1 / 1 / 0.4 | c1, c2, c3 of the genetic distance |
-| `distanceMinGenes` | 20 | N of the genetic distance is never lower than this |
-| `survivalRate` | 0.2 | Best part of a specie that can be a parent |
-| `championMinSpecieSize` | 5 | The champion is copied unchanged if the specie is bigger than this |
-| `cloneChance` | 0.25 | Child = copy of a parent (otherwise crossover) |
-| `interspeciesCrossoverChance` | 0.001 | Second parent from another specie |
-| `disabledGeneChance` | 0.75 | Gene disabled in a parent, disabled in the child |
-| `weightMutationChance` | 0.8 | Chance of mutating the weights of a child |
-| `weightPerturbChance` / `weightPerturbance` | 0.9 / 0.1 | Slight change (± weightPerturbance) or new random value |
-| `addNodeChance` / `deleteNodeChance` | 0.03 / 0.01 | Structural mutations |
-| `addConnectionChance` / `deleteConnectionChance` | 0.05 / 0.03 | Structural mutations |
-| `addConnectionAttempts` | 20 | Random pairs tried by Add Connection before giving up |
-*/
+let running = false;
 
-const neat = new Neat({
-  inputs: inputCount(), // rays + speed + acceleration + drift
-  outputs: 2, // steer, throttle
-  activation: 'tanh', // outputs in -1..1
-  populationSize: POPULATION,
-  complexityPenalty: 0,
-  weightRange: 10,
-  maxStagnation: 50,
-  addNodeChance: 0.1,
-  deleteNodeChance: 0.02,
-  addConnectionChance: 0.15,
-  deleteConnectionChance: 0.75,
-  minSpecies: 20,
-  maxSpecies: 30,
+startButton.addEventListener('click', () => {
+  running = !running;
+  startButton.textContent = running ? 'Pause' : 'Resume';
 });
 
-let sim: Simulation;
-let agents: Agent[] = [];
-let lastStats: GenerationStats | null = null;
-let running = false;
+resetButton.addEventListener('click', async () => {
+  if (!confirm('Delete the saved genome and start training again from generation 1?')) return;
+  try {
+    await fetch(SAVE_URL, { method: 'DELETE' });
+  } catch {
+    // no dev server: nothing to delete
+  }
+  trainer = createTrainer(null);
+  networkView.clear();
+  networksDirty = false;
+});
 
 // Network graphs in the footer. Node labels: one per ray (its angle), then the extra inputs
 const rayLabels = DEFAULT_SIMULATION_CONFIG.sensors.angles.map((a) => `${Math.round((a * 180) / Math.PI)}°`);
@@ -102,42 +98,18 @@ let networksDirty = false;
 let lastNetworkDraw = 0;
 
 function updateNetworks(): void {
-  const snapshot = neat.getSnapshot();
+  const snapshot = trainer.neat.getSnapshot();
   if (!networksDirty || !snapshot || performance.now() - lastNetworkDraw < NETWORK_REDRAW_MS) return;
   networkView.show(snapshot);
   networksDirty = false;
   lastNetworkDraw = performance.now();
 }
 
-startButton.addEventListener('click', () => {
-  running = !running;
-  startButton.textContent = running ? 'Pause' : 'Resume';
-});
-
-// One car per genome; agents[i] is driven by neat.population[i]
-function startGeneration(): void {
-  sim = new Simulation(track);
-  agents = sim.spawn(neat.population.length);
-}
-
-function endGeneration(): void {
-  agents.forEach((agent, i) => {
-    neat.population[i].rawFitness = fitness(agent);
-  });
-  lastStats = neat.evolve();
-  networksDirty = true;
-  startGeneration();
-}
-
-/** One simulation step: every alive car asks its genome what to do, then the world moves. */
+/** One training step; at the end of a generation the best genome is saved. */
 function step(): void {
-  agents.forEach((agent, i) => {
-    if (!agent.alive) return;
-    const [steer, throttle] = neat.population[i].predict(agent.sensors);
-    agent.setControls({ steer, throttle });
-  });
-  sim.step();
-  if (sim.allDead || sim.time >= MAX_GENERATION_TIME) endGeneration();
+  if (!trainer.step()) return;
+  networksDirty = true;
+  writeSave(trainer.toSave()!);
 }
 
 // ---- Red test car: driven with the keyboard, in its own simulation so generations never reset it ----
@@ -179,7 +151,7 @@ function stepPlayer(): void {
 /** The car that got furthest among those still driving. */
 function leader(): Agent | null {
   let best: Agent | null = null;
-  for (const agent of agents) {
+  for (const agent of trainer.agents) {
     if (!agent.alive) continue;
     if (!best || agent.checkpointsPassed > best.checkpointsPassed) best = agent;
   }
@@ -187,6 +159,7 @@ function leader(): Agent | null {
 }
 
 function updateInfo(focus: Agent | null): void {
+  const { neat, sim, agents, lastStats } = trainer;
   const laps = (checkpoints: number) => (checkpoints / track.checkpoints.length).toFixed(2) + ' laps';
   info.textContent = [
     `track         ${track.name}`,
@@ -197,6 +170,7 @@ function updateInfo(focus: Agent | null): void {
     `leader        ${focus ? laps(focus.checkpointsPassed) : '-'}`,
     `last gen best ${lastStats ? laps(lastStats.best.rawFitness) : '-'}`,
     `best ever     ${neat.best ? laps(neat.best.rawFitness) : '-'}`,
+    `save file     ${savedGeneration !== null ? `generation ${savedGeneration}` : '-'}`,
     ``,
     `red car       ${player.alive ? 'arrows / WASD to drive, R to reset' : 'crashed, press R to reset'}`,
     `  speed       ${player.car.speed.toFixed(0)} / ${player.car.config.maxSpeed}`,
@@ -230,6 +204,7 @@ function frame(now: number): void {
     }
   }
 
+  const dt = trainer.sim.config.dt;
   if (!running) {
     accumulator = 0;
   } else if (speedSelect.value === 'max') {
@@ -240,16 +215,16 @@ function frame(now: number): void {
     accumulator = 0;
   } else {
     accumulator += realDt * Number(speedSelect.value);
-    while (accumulator >= sim.config.dt && performance.now() - frameStart < FRAME_BUDGET_MS) {
+    while (accumulator >= dt && performance.now() - frameStart < FRAME_BUDGET_MS) {
       step();
       stepPlayer();
-      accumulator -= sim.config.dt;
+      accumulator -= dt;
     }
-    accumulator = Math.min(accumulator, sim.config.dt); // don't build up a backlog when the CPU can't keep up
+    accumulator = Math.min(accumulator, dt); // don't build up a backlog when the CPU can't keep up
   }
 
   const focus = leader();
-  renderer.draw(sim, {
+  renderer.draw(trainer.sim, {
     focus,
     showSensors: sensorsSelect.value as 'none' | 'focus' | 'all',
     showCheckpoints: checkpointsToggle.checked,
@@ -260,6 +235,5 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 
-startGeneration();
 resetPlayer();
 requestAnimationFrame(frame);

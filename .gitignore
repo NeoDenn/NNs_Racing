@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 
 .claude
+# Trained genome (npm run train / the page)
+saves

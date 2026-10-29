@@ -93,6 +93,43 @@ export class Neat {
     return id;
   }
 
+  // Starts again from a saved genome (e.g. Genome.fromJSON): the population becomes copies of it,
+  // one unchanged and the others with mutated weights. Species and best genome start again from zero
+  seed(genome: Genome, generation = 1): void {
+    const nodes = [...genome.nodes.values()];
+    const inputs = nodes.filter(x => x.type == "input").length;
+    const outputs = nodes.filter(x => x.type == "output").length;
+    if (inputs != this.config.inputs || outputs != this.config.outputs)
+      throw new Error("seed: the genome has " + inputs + " inputs and " + outputs + " outputs, expected " + this.config.inputs + " and " + this.config.outputs);
+
+    // Ids of the genome's connections and nodes, so new mutations don't reuse them
+    this.connectionIds.clear();
+    this.splitNodes.clear();
+    this.nextConnectionID = 0;
+    for (const connection of genome.connections.values()) {
+      this.connectionIds.set(connection.nodeInID + "->" + connection.nodeOutID, connection.id);
+      this.nextConnectionID = Math.max(this.nextConnectionID, connection.id + 1);
+    }
+    this.nextNodeID = Math.max(this.config.inputs + this.config.outputs, ...nodes.map(x => x.id + 1));
+
+    this.population = [genome.clone()];
+    while (this.population.length < this.config.populationSize) {
+      const child = genome.clone();
+      child.mutateWeights(this);
+      this.population.push(child);
+    }
+    for (const g of this.population) {
+      g.rawFitness = 0;
+      g.fitness = 0;
+    }
+
+    this.speciesPool.clear();
+    this.compatibilityThreshold = this.config.compatibilityThreshold;
+    this.best = undefined;
+    this.snapshot = undefined;
+    this.generation = generation;
+  }
+
   // Automatic mode: evaluates every genome with the fitness function, then creates the next generation
   step(): GenerationStats {
     if (this.fitnessFunction === undefined)

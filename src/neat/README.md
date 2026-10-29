@@ -189,6 +189,15 @@ const loaded = Genome.fromJSON(JSON.parse(saved));
 loaded.predict([0.5, 1]);                        // same outputs, no Neat needed
 ```
 
+To **continue training** from a saved genome, seed a new `Neat` with it (same `inputs` and `outputs`):
+
+```ts
+const neat = new Neat({ inputs: 2, outputs: 1 });
+neat.seed(loaded, 250);                          // optional: number of the next generation (default 1)
+```
+
+The population becomes copies of the genome: one unchanged, the others with mutated weights. Species and `neat.best` start again from zero.
+
 ## What `step()`, `evolve()` and `run()` return
 
 `step()` and `evolve()` return the stats of the generation that was just evaluated. `run()` calls `onGeneration` with these stats after every generation.

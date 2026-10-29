@@ -24,7 +24,7 @@ export class NetworkView {
     this.container = container;
     this.inputLabels = inputLabels;
     this.outputLabels = outputLabels;
-    this.container.innerHTML = '<p class="net-empty">The best network of each specie appears after the first generation</p>';
+    this.clear();
 
     window.addEventListener('resize', () => {
       for (const cy of this.graphs) {
@@ -32,6 +32,13 @@ export class NetworkView {
         cy.fit(undefined, 12);
       }
     });
+  }
+
+  /** Removes the graphs, until the next show. */
+  clear(): void {
+    for (const cy of this.graphs) cy.destroy();
+    this.graphs = [];
+    this.container.innerHTML = '<p class="net-empty">The best network of each specie appears after the first generation</p>';
   }
 
   show(snapshot: Snapshot): void {
